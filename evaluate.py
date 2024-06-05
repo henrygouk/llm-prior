@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--tau", type=float, default=1.0)
     parser.add_argument("--gamma", type=float, default=0.5)
     parser.add_argument("--delta", type=float, default=1.0)
+    parser.add_argument("--few-shot-only", action="store_true")
 
     args = parser.parse_args()
 
@@ -66,7 +67,12 @@ def main():
             X_test = X[start:end]
             y_test = y[start:end]
 
-            for k in [5, 10, 20, 40, 80]:
+            if args.few_shot_only:
+                shots = [5, 10]
+            else:
+                shots = [5, 10, 20, 40, 80]
+
+            for k in shots:
                 # Get k random samples
                 indices = np.random.permutation(X_train.shape[0])
                 X_train_k = X_train[indices[:k]]
