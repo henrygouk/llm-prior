@@ -16,6 +16,7 @@ do
       --prior-cache prior_cache/diabetes.pkl \
       --prior-samples ${m} \
       --delta 0.5 \
+      --few-shot-only \
       | tee results/diabetes/prior-samples-efficiency/baseline_${m}_d0_5.csv
 
     python evaluate.py \
@@ -24,6 +25,8 @@ do
       --data-path datasets/diabetes.arff \
       --prior-cache prior_cache/diabetes.pkl \
       --prior-samples ${m} \
+      --delta 1.0 \
+      --few-shot-only \
       | tee results/diabetes/prior-samples-efficiency/llm_${m}_d1_0.csv
 
     python evaluate.py \
@@ -33,5 +36,6 @@ do
       --prior-cache prior_cache/diabetes.pkl \
       --prior-samples ${m} \
       --delta 2.0 \
+      --few-shot-only \
       | tee results/diabetes/prior-samples-efficiency/llm_${m}_d2_0.csv
 done
