@@ -20,6 +20,7 @@ $ ./run_experiments.sh [base_url] [model_repo]
 Where the optional arguments are as follows:
 - `base_url` is the base URL for vLLM API. E.g., `http://localhost:8000/v1`.
 - `model_repo` is the name of the model repository on hugging face. E.g., `meta-llama/Meta-Llama-3-8B-Instruct`.
+
 These arguments can be ommitted if the priors are already cached in `prior_cache`.
 
 The script will run the experiments for the following datasets:
@@ -29,4 +30,4 @@ The script will run the experiments for the following datasets:
 - `survival`
 - `vote`
 
-The results will be saved in the `results` directory.
+These datasets are stored in a modified ARFF file format in the `datasets` directory. The results will be saved in the `results` directory.
