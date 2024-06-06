@@ -35,6 +35,8 @@ def main():
         if args.prior_cache is not None and os.path.exists(args.prior_cache):
             with open(args.prior_cache, "rb") as f:
                 K_X, K_y = pickle.load(f)
+                K_X = K_X[:args.prior_samples]
+                K_y = K_y[:args.prior_samples]
         else:
             client = OpenAI(api_key="none", base_url=args.base_url)
             sampler = LLMSampler(client, args.model, meta_data)
@@ -68,7 +70,7 @@ def main():
             y_test = y[start:end]
 
             if args.few_shot_only:
-                shots = [5, 10]
+                shots = [10]
             else:
                 shots = [5, 10, 20, 40, 80]
 

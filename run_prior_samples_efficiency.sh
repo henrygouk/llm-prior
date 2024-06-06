@@ -7,7 +7,7 @@ model=${2:-meta-llama/Meta-Llama-3-8B-Instruct}
 
 mkdir -p results/diabetes/prior-samples-efficiency
 
-for m in 5 10 20 40 80:
+for m in 5 10 20 40 80
 do
     python evaluate.py \
       --base-url ${base_url} \
