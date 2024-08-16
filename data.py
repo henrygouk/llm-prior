@@ -37,7 +37,7 @@ def load_arff(data_path: str) -> Tuple[MetaData, np.ndarray, np.ndarray]:
         description = parts[1].strip()
 
         features.append(Attribute(name=name, description=description, dtype="float", values=None))
-    
+
     target_parts = records["attributes"][-1][0].split(':')
     target_name = target_parts[0].strip()
     target_description = target_parts[1].strip()

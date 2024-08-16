@@ -3,7 +3,7 @@ This repository contains an implementation for Bayesian logistic regression, whe
 
 ## Requirements
 
-The code is written in Python 3.9. To install the required packages, run:
+The code is written in Python 3.10. To install the required packages, run:
 ```
 $ pip install -r requirements.txt
 ```
@@ -31,3 +31,15 @@ The script will run the experiments for the following datasets:
 - `vote`
 
 These datasets are stored in a modified ARFF file format in the `datasets` directory. The results will be saved in the `results` directory.
+
+## Reference
+If you use this code in an academic context, please cite the following paper:
+
+```
+@inproceedings{gouk2024automated,
+  title={Automated Prior Elicitation from Large Language Models for Bayesian Logistic Regression},
+  author={Gouk, Henry and Gao, Boyan},
+  booktitle={AutoML Conference 2024 (Workshop Track)},
+  year={2024}
+}
+```
