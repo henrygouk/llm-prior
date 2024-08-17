@@ -4,58 +4,69 @@ import scipy.stats
 
 class BayesLogisticRegression:
 
-    def __init__(self, tau: float = 1.0, gamma: float = 0.5, delta: float = 1.0):
+    def __init__(self, tau: float = 1.0, gamma: float = 0.5, delta: float = 1.0, seed: int = 42):
         self.tau = tau
         self.gamma = gamma
         self.delta = delta
+        self.seed = seed
 
-    def fit(self, X: np.ndarray, y: np.ndarray, K_X: np.ndarray | None = None, K_y: np.ndarray | None = None, progressbar: bool = False, num_classes: int = None):
-        self.model = pm.Model()
+    def fit(self, X: np.ndarray, y: np.ndarray, K_X: np.ndarray | None = None, K_py: np.ndarray | None = None, progressbar: bool = False, num_classes: int | None = None):
+        self.num_trials = X.shape[0]
+        self.num_features = X.shape[1]
 
-        with self.model:
-            self.num_trials = X.shape[0]
-            self.num_features = X.shape[1]
+        if num_classes is None:
+            self.num_classes = len(np.unique(y))
+        else:
+            self.num_classes = num_classes
 
-            if num_classes is None:
-                self.num_classes = len(np.unique(y))
-            else:
-                self.num_classes = num_classes
+        coords = {
+            "trials": np.arange(self.num_trials),
+            "features": np.arange(self.num_features),
+            "classes": np.arange(self.num_classes)
+        }
 
-            coords = {
-                "trials": np.arange(self.num_trials),
-                "features": np.arange(self.num_features),
-                "classes": np.arange(self.num_classes)
-            }
+        if K_X is not None and K_py is not None:
+            coords["prior_trials"] = np.arange(K_X.shape[0])
 
-            self.model = pm.Model(coords=coords)
+        with pm.Model(coords=coords) as generative_model:
+            beta = pm.Normal("beta", mu=0, tau=self.tau, dims=["features", "classes"])
+            alpha = pm.Normal("alpha", mu=0, tau=self.tau, dims="classes")
 
-            with self.model:
-                X_sym = pm.Data("X", X, dims=("trials", "features"))
-                y_sym = pm.Data("y", y, dims=("trials"))
+            X_sym = pm.Data("X", X, dims=["trials", "features"])
+            logits = X_sym @ beta + alpha
+            y_sym = pm.Categorical("y", logit_p=logits, dims="trials")
 
-                beta = pm.Normal("beta", mu=0, tau=self.tau, shape=(self.num_features, self.num_classes))
-                alpha = pm.Normal("alpha", mu=0, tau=self.tau, shape=self.num_classes)
+            if K_X is not None and K_py is not None:
+                K_X_sym = pm.Data("K_X", K_X, dims=["prior_trials", "features"])
+                K_logits = K_X_sym @ beta + alpha
+                K_py_sym = pm.Dirichlet("K_py", a=self.gamma + self.delta * pm.math.softmax(K_logits, axis=1), dims=["prior_trials", "classes"])
 
-                logits = pm.math.dot(X_sym, beta) + alpha
-                y_obs = pm.Categorical("y_obs", p=pm.math.softmax(logits, axis=1), observed=y_sym)
+        if K_X is not None and K_py is not None:
+            with pm.observe(generative_model, {"y": y, "K_py": K_py}) as inference_model:
+                idata = pm.sample(random_seed=self.seed, progressbar=progressbar)
+        else:
+            with pm.observe(generative_model, {"y": y}) as inference_model:
+                idata = pm.sample(random_seed=self.seed, progressbar=progressbar)
 
-                if K_X is not None and K_y is not None:
-                    K_logits = pm.math.dot(K_X, beta) + alpha
-                    a = self.gamma + self.delta * pm.math.softmax(K_logits, axis=1)
-                    K_y_obs = pm.Dirichlet("K_y_obs", a=a, observed=K_y)
-
-                self.trace = pm.sample(1000, tune=1000, progressbar=progressbar)
+        self.inference_model = inference_model
+        self.idata = idata
+        self.coords = coords
 
     def predict(self, X: np.ndarray, progressbar: bool = False) -> np.ndarray:
         # Sample from the posterior predictive
-        with self.model:
-            pm.set_data({"X": X, "y": np.zeros(X.shape[0], dtype=int)}, coords={
-                "trials": np.arange(self.num_trials, self.num_trials + X.shape[0]),
-                "features": np.arange(X.shape[1])
+        with self.inference_model:
+            pm.set_data({"X": X}, coords=self.coords | {
+                "trials": np.arange(0, X.shape[0]),
             })
-
-            post_pred = pm.sample_posterior_predictive(self.trace, predictions=True, progressbar=progressbar).predictions["y_obs"]
-            votes = post_pred.to_numpy().reshape((-1, X.shape[0])).T
+            pps = pm.sample_posterior_predictive(
+                self.idata,
+                predictions=True,
+                extend_inferencedata=True,
+                random_seed=self.seed,
+                progressbar=progressbar
+            )
+            predictions = pps.predictions["y"]
+            votes = predictions.to_numpy().reshape((-1, X.shape[0])).T
             return scipy.stats.mode(votes, axis=1).mode
 
     def score(self, X: np.ndarray, y: np.ndarray, progressbar: bool = False) -> float:
