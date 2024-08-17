@@ -22,7 +22,8 @@ def main():
     parser.add_argument("--tau", type=float, default=1.0)
     parser.add_argument("--gamma", type=float, default=0.5)
     parser.add_argument("--delta", type=float, default=1.0)
-    parser.add_argument("--few-shot-only", action="store_true")
+    parser.add_argument("--samples", nargs="+", type=int, default=[5, 10, 20, 40, 80, 120])
+    parser.add_argument("--seed", type=int, default=42)
 
     args = parser.parse_args()
 
@@ -48,51 +49,42 @@ def main():
 
         K_X = StandardScaler().fit_transform(K_X)
 
-
-    model = BayesLogisticRegression()
+    model = BayesLogisticRegression(tau=args.tau, gamma=args.gamma, delta=args.delta, seed=args.seed)
 
     print("rep,fold,num_train,accuracy")
 
-    for rep in range(args.cv_reps):
-        ## Evaluate the accuracy of the model with cross validation
-        # Start by randomising the order of X, y
-        indices = np.random.permutation(X.shape[0])
-        X = X[indices]
-        y = y[indices]
+    # Use sklearn to generate repeated cross validation folds
+    from sklearn.model_selection import RepeatedStratifiedKFold
+    rskf = RepeatedStratifiedKFold(n_splits=args.cv_folds, n_repeats=args.cv_reps, random_state=args.seed)
 
-        for i in range(args.cv_folds):
-            # Split the data into training and test sets
-            start = i * X.shape[0] // args.cv_folds
-            end = (i + 1) * X.shape[0] // args.cv_folds
-            X_train = np.concatenate((X[:start], X[end:]))
-            y_train = np.concatenate((y[:start], y[end:]))
-            X_test = X[start:end]
-            y_test = y[start:end]
+    for split_id, (train_index, test_index) in enumerate(rskf.split(X, y)):
+        rep = int(split_id / args.cv_folds)
+        fold = split_id % args.cv_folds
 
-            if args.few_shot_only:
-                shots = [10]
+        X_train = X[train_index]
+        y_train = y[train_index]
+        X_test = X[test_index]
+        y_test = y[test_index]
+
+        for k in args.samples:
+            # Get k random samples
+            indices = np.random.permutation(X_train.shape[0])
+            X_train_k = X_train[indices[:k]]
+            y_train_k = y_train[indices[:k]]
+
+            scaler = StandardScaler()
+            X_train_k = scaler.fit_transform(X_train_k)
+            X_test_k = scaler.transform(X_test)
+
+            # Train the model
+            if args.prior_samples > 0:
+                model.fit(X_train_k, y_train_k, K_X, K_y, num_classes=num_classes)
             else:
-                shots = [5, 10, 20, 40, 80]
+                model.fit(X_train_k, y_train_k, num_classes=num_classes)
 
-            for k in shots:
-                # Get k random samples
-                indices = np.random.permutation(X_train.shape[0])
-                X_train_k = X_train[indices[:k]]
-                y_train_k = y_train[indices[:k]]
-
-                scaler = StandardScaler()
-                X_train_k = scaler.fit_transform(X_train_k)
-                X_test_k = scaler.transform(X_test)
-
-                # Train the model
-                if args.prior_samples > 0:
-                    model.fit(X_train_k, y_train_k, K_X, K_y, num_classes=num_classes)
-                else:
-                    model.fit(X_train_k, y_train_k, num_classes=num_classes)
-
-                # Evaluate the model
-                accuracy = model.score(X_test_k, y_test)
-                print(f"{rep},{i},{k},{accuracy}")
+            # Evaluate the model
+            accuracy = model.score(X_test_k, y_test)
+            print(f"{rep},{fold},{X_train_k.shape[0]},{accuracy}")
 
 if __name__ == "__main__":
     main()
