@@ -31,12 +31,16 @@ def load_arff(data_path: str) -> Tuple[MetaData, np.ndarray, np.ndarray]:
 
     features = []
 
-    for schema, _ in records["attributes"][:-1]:
+    for i, (schema, attrib_type) in enumerate(records["attributes"][:-1]):
         parts = schema.split(':')
         name = parts[0].strip()
         description = parts[1].strip()
 
-        features.append(Attribute(name=name, description=description, dtype="float", values=None))
+        if isinstance(attrib_type, list):
+            X[:, i] = [attrib_type.index(v) for v in X[:, i]]
+            features.append(Attribute(name=name, description=description, dtype="str", values=attrib_type))
+        else:
+            features.append(Attribute(name=name, description=description, dtype="float", values=None))
 
     target_parts = records["attributes"][-1][0].split(':')
     target_name = target_parts[0].strip()
