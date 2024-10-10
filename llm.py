@@ -7,11 +7,49 @@ from typing import List, Tuple
 from pydantic import create_model, Field
 import enum
 import sys
+#from vllm import LLM, SamplingParams, GuidedDecodingParams
+
+def llm_factory(model: str, base_url: None | str = None):
+    if base_url is None:
+        #return LocalLLM(model)
+        raise NotImplementedError("Local LLM is not supported")
+    else:
+        return RemoteLLM(model, base_url)
+
+class LocalLLM:
+    def __init__(self, model: str):
+        self.model = model
+        self.llm = LLM(model=model)
+
+    def get_completion(self, messages: List[dict], schema: dict, max_tokens: int | None = None):
+        sampling_params = SamplingParams(temperature=1.0, max_tokens=max_tokens, guided_decoding=GuidedDecodingParams(schema))
+        return self.llm.chat(messages, sampling_params)[0].outputs[0].text
+
+class RemoteLLM:
+    def __init__(self, model: str, base_url: str):
+        self.client = OpenAI(api_key="none", base_url=base_url)
+        self.model = model
+
+    def get_completion(self, messages: List[dict], schema: dict, max_tokens: int | None = None):
+        return self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=1.0,
+            max_tokens=max_tokens,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "Name",
+                    "schema": schema,
+                    "description": "Description",
+                    "strict": True
+                }
+            }
+        ).choices[0].message.content
 
 class DirectLLMSampler:
-    def __init__(self, client: OpenAI, model: str, meta_data: MetaData):
-        self.client = client
-        self.model = model
+    def __init__(self, meta_data: MetaData, model: str, base_url: str | None):
+        self.llm = llm_factory(model, base_url)
         self.meta_data = meta_data
         self.features_schema = self._create_features_schema()
         self.target_schema = self._create_target_schema()
@@ -56,6 +94,15 @@ class DirectLLMSampler:
 
         return fs
 
+    def _feature_value_to_str(self, x: np.ndarray, i: int) -> str:
+        f = self.meta_data.features[i]
+        if f.dtype == "float":
+            return str(x[i])
+        elif f.dtype == "str":
+            return f.values[int(x[i])]
+        else:
+            raise ValueError(f"Invalid data type: {f.dtype}. Must be one of ['float', 'str']")
+
     def _sample_features_batch(self, n: int) -> List:
         schema = {
             "type": "array",
@@ -78,28 +125,30 @@ class DirectLLMSampler:
             }
         ]
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=1.0,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "Features",
-                    "schema": schema,
-                    "description": "A JSON array containing the features for a single example",
-                    "strict": True
-                }
-            }
-        )
+        response = self.llm.get_completion(messages, schema)
 
-        return [self._features_dict_to_list(x) for x in json.loads(response.choices[0].message.content)]
+        try:
+            result = [] 
+
+            for x in json.loads(response):
+                try:
+                    result.append(self._features_dict_to_list(x))
+                except Exception as e:
+                    print(f"Error parsing response: {response}", file=sys.stderr)
+                    print(f"Error: {e}", file=sys.stderr)
+
+            return result
+
+        except json.JSONDecodeError as e:
+            print(f"Error parsing response: {response}", file=sys.stderr)
+            print(f"Error: {e}", file=sys.stderr)
+            return []
 
     def sample_features(self, n: int, batch_size=1) -> np.ndarray:
         X = []
 
         while len(X) < n:
-            batch = self._sample_features_batch(batch_size)
+            batch = self._sample_features_batch(min(batch_size, n - len(X)))
             X.extend(batch)
             # Print progress out to stderr
             print(f"Sampled {len(X)}/{n} examples", file=sys.stderr)
@@ -128,36 +177,26 @@ class DirectLLMSampler:
             {
                 "role": "user",
                 "content": f"Give the target value for the following row in the dataset, but first explain your reasoning:\n"
-                           f"{' '.join(['The ' + self.meta_data.features[i].name + ' is ' + str(x[i]) + '.' for i in range(len(x))])}\n"
+                           f"{' '.join(['The ' + self.meta_data.features[i].name + ' is ' + self._feature_value_to_str(x, i) + '.' for i in range(len(x))])}\n"
                            f"Give your response in JSON format, where the first field contains a brief summary of your reasoning, and the second your prediction"
                            f" of the target"
             }
         ]
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            n=num_trials,
-            temperature=1.0,
-            max_tokens=256,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "Target",
-                    "schema": self.target_schema,
-                    "description": "A JSON object containing the reasoning and target for a single example",
-                    "strict": True
-                }
-            }
-        )
-
         ret = []
 
-        for s in response.choices:
+        #for s in [self.llm.get_completion(messages, self.target_schema, max_tokens=512) for _ in range(num_trials)]:
+        while len(ret) < num_trials:
             try:
-                json_res = json.loads(s.message.content)
+                s = self.llm.get_completion(messages, self.target_schema, max_tokens=512)
+            except Exception as e:
+                print(f"Error getting completion: {e}", file=sys.stderr)
+                continue
+
+            try:
+                json_res = json.loads(s)
             except json.JSONDecodeError as e:
-                print(f"Error parsing response: {s.message.content}", file=sys.stderr)
+                print(f"Error parsing response: {s}", file=sys.stderr)
                 print(f"Error: {e}", file=sys.stderr)
                 continue
 
@@ -166,7 +205,7 @@ class DirectLLMSampler:
                 if t in self.meta_data.target.values:
                     ret.append(self.meta_data.target.values.index(t))
             except KeyError as e:
-                print(f"Error parsing response: {s.message.content}", file=sys.stderr)
+                print(f"Error parsing response: {s}", file=sys.stderr)
                 print(f"Error: {e}", file=sys.stderr)
 
         return ret
@@ -182,7 +221,7 @@ class DirectLLMSampler:
 
         return y / y.sum(axis=1, keepdims=True)
 
-    def sample(self, n: int, batch_size: int = 10, num_trials: int = 5, target_smooth: float = 0.5) -> Tuple[np.ndarray, np.ndarray]:
+    def sample(self, n: int, batch_size: int = 5, num_trials: int = 5, target_smooth: float = 0.5) -> Tuple[np.ndarray, np.ndarray]:
         X = self.sample_features(n, batch_size)
         y = self.sample_targets(X, num_trials, target_smooth)
         return X, y

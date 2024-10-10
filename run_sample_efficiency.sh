@@ -4,7 +4,7 @@
 
 base_url=${1:-http://localhost:8000/v1}
 model=${2:-meta-llama/Meta-Llama-3.1-8B-Instruct}
-N=${3:-5}
+N=${3:-8}
 
 # Run on all datasets in the ./datasets/ directory
 datasets=`find ./datasets/ -maxdepth 1 -type f -name "*.arff" -exec basename {} \; | sed 's/.arff//g'`
@@ -25,13 +25,31 @@ function run_baseline_blr() {
 
     python evaluate.py \
         --data-path datasets/${dataset}.arff \
-        --samples 4 8 16 32 64 128 256 512 \
+        --samples 4 8 16 32 64 128 \
         --eval-method holdout \
         --model blr \
         2> logs/baseline/${dataset}/blr.log \
         | tee results/baseline/${dataset}/blr.csv | prepend "${dataset}"
 
     echo "Finished running Bayesian Logistic Regression on ${dataset}..."
+}
+
+function run_baseline_bart() {
+    dataset=$1
+    mkdir -p results/baseline/${dataset}
+    mkdir -p logs/baseline/${dataset}
+
+    echo "Started running Bayesian Additive Regression Trees on ${dataset}..."
+
+    python evaluate.py \
+        --data-path datasets/${dataset}.arff \
+        --samples 4 8 16 32 64 128 \
+        --eval-method holdout \
+        --model bart \
+        2> logs/baseline/${dataset}/bart.log \
+        | tee results/baseline/${dataset}/bart.csv | prepend "${dataset}"
+
+    echo "Finished running Bayesian Additive Regression Trees on ${dataset}..."
 }
 
 function run_llm_blr() {
@@ -46,7 +64,7 @@ function run_llm_blr() {
         --llm ${model} \
         --data-path datasets/${dataset}.arff \
         --prior-cache prior_cache/${model}/${dataset}.pkl \
-        --samples 0 4 8 16 32 64 128 256 512 \
+        --samples 0 4 8 16 32 64 128 \
         --prior-samples 128 \
         --eval-method holdout \
         --model blr \
@@ -56,11 +74,35 @@ function run_llm_blr() {
     echo "Finished running Bayesian Logisitic Regression with LLM (${model}) Prior on ${dataset}..."
 }
 
+function run_llm_bart() {
+    mkdir -p results/${model}/${dataset}
+    mkdir -p logs/${model}/${dataset}
+    mkdir -p prior_cache/${model}
+
+    echo "Started running Bayesian Additive Regression Trees with LLM (${model}) Prior on ${dataset}..."
+
+    python evaluate.py \
+        --base-url ${base_url} \
+        --llm ${model} \
+        --data-path datasets/${dataset}.arff \
+        --prior-cache prior_cache/${model}/${dataset}.pkl \
+        --samples 0 4 8 16 32 64 128 \
+        --prior-samples 128 \
+        --eval-method holdout \
+        --model bart \
+        2> logs/${model}/${dataset}/bart.log \
+        | tee results/${model}/${dataset}/bart.csv | prepend "${dataset}"
+
+    echo "Finished running Bayesian Additive Regression Trees with LLM (${model}) Prior on ${dataset}..."
+}
+
 function run_on_dataset() {
     dataset=$1
 
     run_llm_blr ${dataset}
     run_baseline_blr ${dataset}
+    run_llm_bart ${dataset}
+    run_baseline_bart ${dataset}
 }
 
 for dataset in ${datasets[@]}

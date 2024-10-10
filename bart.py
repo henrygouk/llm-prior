@@ -1,33 +1,34 @@
-from typing import Tuple
-import arviz as az
 import numpy as np
+from numpy.core.fromnumeric import argmax
 import pymc as pm
-import scipy.stats
-from pymc.model.fgraph import clone_model
+from pymc.backends.arviz import coords_and_dims_for_inferencedata
+import pymc_bart as pmb
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.preprocessing import StandardScaler
+from pymc.model.fgraph import clone_model
+from typing import Tuple
+import arviz as az
 import sys
 
-class BayesLogisticRegression(BaseEstimator, ClassifierMixin):
+class BART(BaseEstimator, ClassifierMixin):
 
     def __init__(self,
-                 tau: float | Tuple[float, float] = (0.5, 5.0),
-                 gamma: float | Tuple[float, float] =(0.5, 5.0),
+                 n_trees: int = 50,
+                 gamma: float | Tuple[float, float] = (0.5, 5.0),
                  delta: float | Tuple[float, float] = (0.0, 5.0),
-                 hpo_iter: int = 20,
-                 use_dirichlet: bool = True,
+                 hpo_iter: int = 10,
                  num_classes: int | None = None,
                  nominal_features: list[Tuple[int, int]] = [],
+                 use_dirichlet: bool = False,
                  seed: int = 42,
                  chains: int = 4,
                  tune: int = 1000,
                  draws: int = 1000,
                  cores: int | None = None):
-        self.tau = tau
+        self.n_trees = n_trees
         self.gamma = gamma
         self.delta = delta
         self.hpo_iter = hpo_iter
-        self.use_dirichlet = use_dirichlet
         self.num_classes = num_classes
         self.nominal_features = nominal_features
         self.seed = seed
@@ -35,12 +36,13 @@ class BayesLogisticRegression(BaseEstimator, ClassifierMixin):
         self.tune = tune
         self.draws = draws
         self.cores = cores
+        self.use_dirichlet = use_dirichlet
 
     def _get_coords(self, X: np.ndarray, y: np.ndarray, K_X: np.ndarray | None = None, K_py: np.ndarray | None = None, num_classes: int | None = None) -> dict:
         if X.shape[0] == 0 and (K_X is None or (K_X is not None and K_X.shape[0] == 0)):
             raise ValueError("Both X and K_X cannot be empty.")
 
-        num_trials = X.shape[0]
+        num_trials = X.shape[0] if K_X is None else K_X.shape[0] + X.shape[0]
         num_features = X.shape[1] if X.shape[0] > 0 else K_X.shape[1]
 
         if num_classes is None:
@@ -53,63 +55,9 @@ class BayesLogisticRegression(BaseEstimator, ClassifierMixin):
             "classes": np.arange(num_classes)
         }
 
-        if X.shape[0] > 0:
-            coords["trials"] = np.arange(num_trials)
+        coords["trials"] = np.arange(num_trials)
 
         return coords
-
-    def _pymc_model(self,
-                    X: np.ndarray,
-                    y: np.ndarray,
-                    K_X: np.ndarray | None,
-                    K_py: np.ndarray | None,
-                    num_classes: int | None,
-                    tau: float | Tuple[float, float],
-                    gamma: float | Tuple[float, float],
-                    delta: float | Tuple[float, float]
-                ) -> pm.Model:
-        coords = self._get_coords(X, y, K_X, K_py, num_classes)
-
-        if K_X is not None and K_py is not None:
-            coords["prior_trials"] = np.arange(K_X.shape[0])
- 
-        with pm.Model(coords=coords) as generative_model:
-            if isinstance(tau, tuple):
-                tau = pm.Uniform("tau", lower=tau[0], upper=tau[1])
-
-            beta = pm.Normal("beta", mu=0, tau=tau, dims=["features", "classes"])
-            alpha = pm.Normal("alpha", mu=0, tau=tau, dims="classes")
-
-            if X.shape[0] > 0:
-                X_sym = pm.Data("X", X, dims=["trials", "features"])
-                logits = X_sym @ beta + alpha
-                y_sym = pm.Categorical("y", logit_p=logits, dims="trials")
-
-            if K_X is not None and K_py is not None:
-                if isinstance(gamma, tuple):
-                    gamma = pm.Uniform("gamma", lower=gamma[0], upper=gamma[1])
-
-                if isinstance(delta, tuple):
-                    delta = pm.Uniform("delta", lower=delta[0], upper=delta[1])
-
-                K_X_sym = pm.Data("K_X", K_X, dims=["prior_trials", "features"])
-                K_logits = K_X_sym @ beta + alpha
-
-                if self.use_dirichlet:
-                    K_py_sym = pm.Dirichlet("K_py", a=gamma + delta * pm.math.softmax(K_logits, axis=1), dims=["prior_trials", "classes"])
-                else:
-                    K_py_sym = pm.Categorical("K_py", logit_p=K_logits, dims="prior_trials")
-
-        if K_X is not None and K_py is not None:
-            if self.use_dirichlet:
-                generative_model = pm.observe(generative_model, {"K_py": K_py})
-            else:
-                generative_model = pm.observe(generative_model, {"K_py": K_py.argmax(axis=1)})
-
-        if X.shape[0] > 0:
-            generative_model = pm.observe(generative_model, {"y": y})
-
-        return generative_model
 
     def _one_hot(self, X):
         for i, c in self.nominal_features:
@@ -117,15 +65,52 @@ class BayesLogisticRegression(BaseEstimator, ClassifierMixin):
 
         return np.delete(X, [i for i, _ in self.nominal_features], axis=1)
 
-    def fit(self, X: np.ndarray, y: np.ndarray, K_X: np.ndarray | None = None, K_py: np.ndarray | None = None, progressbar: bool = False) -> BaseEstimator:
+    def _pymc_model(self, X: np.ndarray, y: np.ndarray, K_X: np.ndarray | None, K_py: np.ndarray | None, num_classes: int | None, gamma: Tuple[float, float] | float, delta: Tuple[float, float] | float) -> pm.Model:
+        coords = self._get_coords(X, y, K_X, K_py, num_classes)
 
+        with pm.Model(coords=coords) as model:
+            if K_X is not None and X.shape[0] > 0:
+                X_all = np.concatenate((X, K_X), axis=0)
+                y_all = np.concatenate((y, K_py.argmax(axis=1)), axis=0)
+                mask = np.concatenate((np.ones(X.shape[0]), np.zeros(K_X.shape[0])), axis=0)
+            elif K_X is not None:
+                X_all = K_X
+                y_all = K_py.argmax(axis=1)
+                mask = np.zeros(K_X.shape[0])
+            else:
+                X_all = X
+                y_all = y
+                mask = np.ones(X.shape[0])
+
+            X_sym = pm.Data("X", X_all, dims=["trials", "features"])
+            mask_sym = pm.Data("mask", mask, dims=["trials"])
+
+            z = pmb.BART("z", X_sym, y_all, m=self.n_trees)
+            p_y = pm.Deterministic("p", pm.math.sigmoid(z))
+
+            if self.use_dirichlet:
+                if isinstance(gamma, tuple):
+                    gamma = pm.Uniform("gamma", lower=gamma[0], upper=gamma[1])
+
+                if isinstance(delta, tuple):
+                    delta = pm.Uniform("delta", lower=delta[0], upper=delta[1])
+
+                y_sym = pm.Bernoulli("y", p=p_y, observed=y_all, dims=["trials"]) * mask_sym
+                p_y_mat = pm.math.stack((1 - p_y, p_y), axis=-1)
+                y_k_sym = pm.Dirichlet("y_k", a=gamma + delta * p_y_mat, dims=["trials", "classes"]) * pm.math.stack((1 - mask_sym, 1 - mask_sym), axis=-1)
+            else:
+                y_sym = pm.Bernoulli("y", p=p_y, observed=y_all, dims=["trials"])
+
+        return model
+
+    def fit(self, X: np.ndarray, y: np.ndarray, K_X: np.ndarray | None = None, K_py: np.ndarray | None = None, progressbar: bool = False) -> BaseEstimator:
         # One-hot encode nominal features while leaving numeric features unchanged
-        if X.shape[0] > 0:
-            X = self._one_hot(X)
+        X = self._one_hot(X)
         if K_X is not None:
             K_X = self._one_hot(K_X)
 
         self.scaler = StandardScaler()
+
 
         if X.shape[0] > 0:
             self.scaler.partial_fit(X)
@@ -144,8 +129,8 @@ class BayesLogisticRegression(BaseEstimator, ClassifierMixin):
         best_model = None
         best_idata = None
 
-        if X.shape[0] == 0:
-            best_model = self._pymc_model(X, y, K_X, K_py, num_classes, self.tau, self.gamma, self.delta)
+        if self.hpo_iter == 0 or X.shape[0] == 0 or self.use_dirichlet == False:
+            best_model = self._pymc_model(X, y, K_X, K_py, num_classes, self.gamma, self.delta)
 
             with best_model:
                 best_idata = pm.sample(
@@ -161,13 +146,12 @@ class BayesLogisticRegression(BaseEstimator, ClassifierMixin):
             rng = np.random.default_rng(self.seed)
 
             for i in range(self.hpo_iter):
-                tau = rng.uniform(self.tau[0], self.tau[1]) if isinstance(self.tau, tuple) else self.tau
                 gamma = rng.uniform(self.gamma[0], self.gamma[1]) if isinstance(self.gamma, tuple) else self.gamma
                 delta = rng.uniform(self.delta[0], self.delta[1]) if isinstance(self.delta, tuple) else self.delta
 
-                print(f"Hyperparameter iteration {i+1}/{self.hpo_iter} with tau={tau}, gamma={gamma}, delta={delta}", file=sys.stderr)
+                print(f"Hyperparameter iteration {i+1}/{self.hpo_iter} with gamma={gamma}, delta={delta}", file=sys.stderr)
 
-                inference_model = self._pymc_model(X, y, K_X, K_py, num_classes, tau, gamma, delta)
+                inference_model = self._pymc_model(X, y, K_X, K_py, num_classes, gamma, delta)
 
                 with inference_model:
                     idata = pm.sample(
@@ -189,6 +173,7 @@ class BayesLogisticRegression(BaseEstimator, ClassifierMixin):
                         best_model = clone_model(inference_model)
                         best_idata = idata
 
+
         self.inference_model_ = best_model
         self.idata_ = best_idata
         self.coords_ = coords
@@ -202,35 +187,29 @@ class BayesLogisticRegression(BaseEstimator, ClassifierMixin):
 
         return self
 
-    def predict(self, X: np.ndarray, progressbar: bool = False) -> np.ndarray:
-        if self.idata_ is None:
-            raise ValueError("Model must be fit before making predictions.")
-
-        votes = self._predict_impl(X, progressbar)
-        return scipy.stats.mode(votes, axis=1).mode
-
     def predict_proba(self, X: np.ndarray, progressbar: bool = False) -> np.ndarray:
         if self.idata_ is None:
             raise ValueError("Model must be fit before making predictions.")
 
-        votes = self._predict_impl(X, progressbar)
-        probs = np.zeros((X.shape[0], self.classes_.shape[0]))
-
-        for i in range(X.shape[0]):
-            for j in range(self.classes_.shape[0]):
-                probs[i, j] = np.mean(votes[:, i] == j)
-
+        probs = self._predict_impl(X, progressbar).mean(axis=(0, 1))
+        probs = np.column_stack([1 - probs, probs])
         return probs
 
     def _predict_impl(self, X: np.ndarray, progressbar: bool = False) -> np.ndarray:
-        X = self._one_hot(X)
-        X = self.scaler.transform(X)
-        beta = self.idata_.posterior["beta"].to_numpy().reshape((-1, X.shape[1], self.classes_.shape[0]))
-        alpha = self.idata_.posterior["alpha"].to_numpy().reshape((-1, 1, self.classes_.shape[0]))
-        logits = np.matmul(X, beta) + alpha
-        preds = np.argmax(logits, axis=2)
+        if X.shape[0] > 0:
+            X = self._one_hot(X)
+            X = self.scaler.transform(X)
+
+        with self.inference_model_:
+            pm.set_data({"X": X, "mask": np.ones(X.shape[0])}, coords={
+                "features": np.arange(X.shape[1]),
+                "trials": np.arange(X.shape[0]),
+                "classes": self.classes_
+            })
+            ppc = pm.sample_posterior_predictive(self.idata_, progressbar=progressbar, predictions=True, random_seed=self.seed)
+
+        preds = ppc.predictions["y"].to_numpy()
         return preds
 
     def _loo(self, idata) -> float:
         return az.loo(idata, var_name="y").loo_i.mean().item()
-

@@ -1,6 +1,7 @@
 import argparse
 from data import load_arff
 from linear import BayesLogisticRegression
+from bart import BART
 from llm import DirectLLMSampler
 import numpy as np
 from openai import OpenAI
@@ -24,10 +25,8 @@ def load_data(args):
                 K_X = K_X[:args.prior_samples]
                 K_py = K_py[:args.prior_samples]
         else:
-            client = OpenAI(api_key="none", base_url=args.base_url)
-
             if args.llm_sampler == "direct":
-                sampler = DirectLLMSampler(client, args.llm, meta_data)
+                sampler = DirectLLMSampler(meta_data, args.llm, args.base_url) #DirectLLMSampler(client, args.llm, meta_data)
             else:
                 raise ValueError(f"Unknown LLM sampler: {args.llm_sampler}")
 
@@ -49,9 +48,19 @@ def create_model(meta_data, args):
             num_classes=len(meta_data.target.values),
             nominal_features=[(i, len(f.values)) for i, f in enumerate(meta_data.features) if f.dtype == "str"],
         )
+    elif args.model == "bart":
+        return BART(
+            n_trees=args.bart_n_trees,
+            gamma=(0.5, 5.0),
+            delta=(0.0, 5.0),
+            hpo_iter=args.bart_hpo_iter,
+            num_classes=len(meta_data.target.values),
+            nominal_features=[(i, len(f.values)) for i, f in enumerate(meta_data.features) if f.dtype == "str"],
+        )
     else:
         raise ValueError(f"Unknown model: {args.model}")
 
+# Repeated holdout will give a better picture of true performance than CV in the few-shot setting
 def evaluate_repeated_cv(X, y, K_X, K_py, model, args):
     num_classes = len(np.unique(y))
     print("rep,fold,num_train,roc_auc")
@@ -131,9 +140,9 @@ def main():
     parser.add_argument("--cv-folds", type=int, default=10)
     parser.add_argument("--cv-reps", type=int, default=5)
     # Options for holdout
-    parser.add_argument("--ho-reps", type=int, default=50)
+    parser.add_argument("--ho-reps", type=int, default=10)
 
-    parser.add_argument("--model", choices=["blr"], required=True)
+    parser.add_argument("--model", choices=["blr", "bart"], required=True)
     # Options for blr
     parser.add_argument("--blr-hpo-iter", type=int, default=20)
     parser.add_argument("--blr-tau-min", type=float, default=0.5)
@@ -142,6 +151,9 @@ def main():
     parser.add_argument("--blr-gamma-max", type=float, default=5.0)
     parser.add_argument("--blr-delta-min", type=float, default=0.0)
     parser.add_argument("--blr-delta-max", type=float, default=5.0)
+    # Options for bart
+    parser.add_argument("--bart-hpo-iter", type=int, default=10)
+    parser.add_argument("--bart-n-trees", type=int, default=50)
 
     args = parser.parse_args()
 
