@@ -2,5 +2,6 @@ liac-arff
 numpy
 openai
 pymc
+pymc-bart
 scikit-learn
 scipy
