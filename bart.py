@@ -19,7 +19,7 @@ class BART(BaseEstimator, ClassifierMixin):
                  hpo_iter: int = 10,
                  num_classes: int | None = None,
                  nominal_features: list[Tuple[int, int]] = [],
-                 use_dirichlet: bool = False,
+                 use_dirichlet: bool = True,
                  seed: int = 42,
                  chains: int = 4,
                  tune: int = 1000,

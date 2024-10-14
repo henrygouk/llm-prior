@@ -140,7 +140,7 @@ def main():
     parser.add_argument("--cv-folds", type=int, default=10)
     parser.add_argument("--cv-reps", type=int, default=5)
     # Options for holdout
-    parser.add_argument("--ho-reps", type=int, default=10)
+    parser.add_argument("--ho-reps", type=int, default=50)
 
     parser.add_argument("--model", choices=["blr", "bart"], required=True)
     # Options for blr
@@ -152,7 +152,7 @@ def main():
     parser.add_argument("--blr-delta-min", type=float, default=0.0)
     parser.add_argument("--blr-delta-max", type=float, default=5.0)
     # Options for bart
-    parser.add_argument("--bart-hpo-iter", type=int, default=10)
+    parser.add_argument("--bart-hpo-iter", type=int, default=20)
     parser.add_argument("--bart-n-trees", type=int, default=50)
 
     args = parser.parse_args()
