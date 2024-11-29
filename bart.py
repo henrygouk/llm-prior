@@ -95,9 +95,10 @@ class BART(BaseEstimator, ClassifierMixin):
                 if isinstance(delta, tuple):
                     delta = pm.Uniform("delta", lower=delta[0], upper=delta[1])
 
-                y_sym = pm.Bernoulli("y", p=p_y, observed=y_all, dims=["trials"]) * mask_sym
+                y_sym = pm.Bernoulli("y", p=p_y, observed=y_all * mask_sym, dims=["trials"])
                 p_y_mat = pm.math.stack((1 - p_y, p_y), axis=-1)
-                y_k_sym = pm.Dirichlet("y_k", a=gamma + delta * p_y_mat, dims=["trials", "classes"]) * pm.math.stack((1 - mask_sym, 1 - mask_sym), axis=-1)
+                y_k_sym = pm.Dirichlet("y_k", a=gamma + delta * p_y_mat * pm.math.stack((1 - mask_sym, 1 - mask_sym), axis=-1)
+, dims=["trials", "classes"])
             else:
                 y_sym = pm.Bernoulli("y", p=p_y, observed=y_all, dims=["trials"])
 
