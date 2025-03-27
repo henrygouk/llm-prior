@@ -1,16 +1,16 @@
 import argparse
 from data import load_arff
-from linear import BayesLogisticRegression
-from bart import BART
 from llm import DirectLLMSampler
 import numpy as np
-from openai import OpenAI
 import os
+import sys
 import pickle
+from sklearn.model_selection import RepeatedStratifiedKFold, train_test_split
+from sklearn.experimental import enable_halving_search_cv
+from sklearn.model_selection import HalvingRandomSearchCV
 from scipy.stats import uniform
-from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import RepeatedStratifiedKFold, train_test_split, ParameterSampler
-from sklearn.preprocessing import StandardScaler
+
+from supervised import BNNClassifier, BLRClassifier
 
 def load_data(args):
     meta_data, X, y = load_arff(args.data_path)
@@ -40,22 +40,20 @@ def load_data(args):
 
 def create_model(meta_data, args):
     if args.model == "blr":
-        return BayesLogisticRegression(
-            tau=(args.blr_tau_min, args.blr_tau_max),
-            gamma=(args.blr_gamma_min, args.blr_gamma_max),
-            delta=(args.blr_delta_min, args.blr_delta_max),
-            hpo_iter=args.blr_hpo_iter,
-            num_classes=len(meta_data.target.values),
+        return BLRClassifier(
+            tau=(args.tau_min, args.tau_max),
+            gamma=(args.gamma_min, args.gamma_max),
+            delta=(args.delta_min, args.delta_max),
             nominal_features=[(i, len(f.values)) for i, f in enumerate(meta_data.features) if f.dtype == "str"],
+            n_classes=len(meta_data.target.values)
         )
-    elif args.model == "bart":
-        return BART(
-            n_trees=args.bart_n_trees,
-            gamma=(0.5, 5.0),
-            delta=(0.0, 5.0),
-            hpo_iter=args.bart_hpo_iter,
-            num_classes=len(meta_data.target.values),
+    elif args.model == "bnn":
+        return BNNClassifier(
+            tau=(args.tau_min, args.tau_max),
+            gamma=(args.gamma_min, args.gamma_max),
+            delta=(args.delta_min, args.delta_max),
             nominal_features=[(i, len(f.values)) for i, f in enumerate(meta_data.features) if f.dtype == "str"],
+            n_classes=len(meta_data.target.values)
         )
     else:
         raise ValueError(f"Unknown model: {args.model}")
@@ -87,13 +85,16 @@ def evaluate_repeated_cv(X, y, K_X, K_py, model, args):
             else:
                 raise ValueError("--samples cannot contain a value greater than the the number of classes or the number of training samples avialable during cross validation.")
 
-            if args.prior_samples > 0:
-                model.fit(X_train_k, y_train_k, K_X, K_py)
-            else:
-                model.fit(X_train_k, y_train_k)
+            try:
+                if args.prior_samples > 0:
+                    model.fit(X_train_k, y_train_k, K_X, K_py)
+                else:
+                    model.fit(X_train_k, y_train_k)
 
-            auc = compute_auc(model, X_test, y_test)
-            print(f"{rep},{fold},{X_train_k.shape[0]},{auc}")
+                auc = model.score(X_test, y_test)
+                print(f"{rep},{fold},{X_train_k.shape[0]},{auc}")
+            except Exception as e:
+                print(f"{rep},{fold},{X_train_k.shape[0]},nan")
 
 def evaluate_repeated_holdout(X, y, K_X, K_py, model, args):
     rng = np.random.default_rng(args.seed)
@@ -108,21 +109,18 @@ def evaluate_repeated_holdout(X, y, K_X, K_py, model, args):
             else:
                 X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=k, stratify=y, random_state=rng.integers(0, 2**32))
 
-            if K_X is not None:
-                model.fit(X_train, y_train, K_X, K_py)
-            else:
-                model.fit(X_train, y_train)
+            try:
+                if K_X is not None:
+                    model.fit(X_train, y_train, K_X, K_py)
+                else:
+                    model.fit(X_train, y_train)
 
-            auc = compute_auc(model, X_test, y_test)
-            print(f"{i},{k},{auc}")
-
-def compute_auc(model, X, y):
-    num_classes = len(np.unique(y))
-
-    if num_classes == 2:
-        return roc_auc_score(y, model.predict_proba(X)[:, 1])
-    else:
-        return roc_auc_score(y, model.predict_proba(X), multi_class="ovr")
+                auc = model.score(X_test, y_test)
+                print(f"{i},{k},{auc}")
+            except Exception as e:
+                # Print to stderr
+                print(e, file=sys.stderr)
+                print(f"{i},{k},nan")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -142,18 +140,13 @@ def main():
     # Options for holdout
     parser.add_argument("--ho-reps", type=int, default=50)
 
-    parser.add_argument("--model", choices=["blr", "bart"], required=True)
-    # Options for blr
-    parser.add_argument("--blr-hpo-iter", type=int, default=20)
-    parser.add_argument("--blr-tau-min", type=float, default=0.5)
-    parser.add_argument("--blr-tau-max", type=float, default=5.0)
-    parser.add_argument("--blr-gamma-min", type=float, default=0.5)
-    parser.add_argument("--blr-gamma-max", type=float, default=5.0)
-    parser.add_argument("--blr-delta-min", type=float, default=0.0)
-    parser.add_argument("--blr-delta-max", type=float, default=5.0)
-    # Options for bart
-    parser.add_argument("--bart-hpo-iter", type=int, default=20)
-    parser.add_argument("--bart-n-trees", type=int, default=50)
+    parser.add_argument("--model", choices=["blr", "bnn"], required=True)
+    parser.add_argument("--tau-min", type=float, default=0.5)
+    parser.add_argument("--tau-max", type=float, default=3.0)
+    parser.add_argument("--gamma-min", type=float, default=0.5)
+    parser.add_argument("--gamma-max", type=float, default=5.0)
+    parser.add_argument("--delta-min", type=float, default=0.0)
+    parser.add_argument("--delta-max", type=float, default=5.0)
 
     args = parser.parse_args()
 

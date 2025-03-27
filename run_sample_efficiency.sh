@@ -5,6 +5,7 @@
 base_url=${1:-http://localhost:8000/v1}
 model=${2:-meta-llama/Meta-Llama-3.1-8B-Instruct}
 N=${3:-4}
+runID=${4:-`date +%s`}
 
 # Run on all datasets in the ./datasets/ directory
 datasets=`find ./datasets/ -maxdepth 1 -type f -name "*.arff" -exec basename {} \; | sed 's/.arff//g'`
@@ -18,48 +19,48 @@ function prepend() {
 
 function run_baseline_blr() {
     dataset=$1
-    mkdir -p results/baseline/${dataset}
-    mkdir -p logs/baseline/${dataset}
+    mkdir -p exp/${runID}/results/baseline/${dataset}
+    mkdir -p exp/${runID}/logs/baseline/${dataset}
 
     echo "Started running Bayesian Logistic Regression on ${dataset}..."
 
-    python evaluate.py \
+    python exp_fsl.py \
         --data-path datasets/${dataset}.arff \
         --samples 4 8 16 32 64 128 \
         --eval-method holdout \
         --model blr \
-        2> logs/baseline/${dataset}/blr.log \
-        | tee results/baseline/${dataset}/blr.csv | prepend "${dataset}"
+        2> exp/${runID}logs/baseline/${dataset}/blr.log \
+        | tee exp/${runID}/results/baseline/${dataset}/blr.csv | prepend "${dataset}"
 
     echo "Finished running Bayesian Logistic Regression on ${dataset}..."
 }
 
-function run_baseline_bart() {
+function run_baseline_bnn() {
     dataset=$1
-    mkdir -p results/baseline/${dataset}
-    mkdir -p logs/baseline/${dataset}
+    mkdir -p exp/${runID}/results/baseline/${dataset}
+    mkdir -p exp/${runID}/logs/baseline/${dataset}
 
-    echo "Started running Bayesian Additive Regression Trees on ${dataset}..."
+    echo "Started running Bayesian Neural Network on ${dataset}..."
 
-    python evaluate.py \
+    python exp_fsl.py \
         --data-path datasets/${dataset}.arff \
         --samples 4 8 16 32 64 128 \
         --eval-method holdout \
-        --model bart \
-        2> logs/baseline/${dataset}/bart.log \
-        | tee results/baseline/${dataset}/bart.csv | prepend "${dataset}"
+        --model bnn \
+        2> exp/${runID}/logs/baseline/${dataset}/bnn.log \
+        | tee exp/${runID}/results/baseline/${dataset}/bnn.csv | prepend "${dataset}"
 
-    echo "Finished running Bayesian Additive Regression Trees on ${dataset}..."
+    echo "Finished running Bayesian Neural Network on ${dataset}..."
 }
 
 function run_llm_blr() {
-    mkdir -p results/${model}/${dataset}
-    mkdir -p logs/${model}/${dataset}
+    mkdir -p exp/${runID}/results/${model}/${dataset}
+    mkdir -p exp/${runID}/logs/${model}/${dataset}
     mkdir -p prior_cache/${model}
 
     echo "Started running Bayesian Logisitic Regression with LLM (${model}) Prior on ${dataset}..."
 
-    python evaluate.py \
+    python exp_fsl.py \
         --base-url ${base_url} \
         --llm ${model} \
         --data-path datasets/${dataset}.arff \
@@ -68,20 +69,20 @@ function run_llm_blr() {
         --prior-samples 128 \
         --eval-method holdout \
         --model blr \
-        2> logs/${model}/${dataset}/blr.log \
-        | tee results/${model}/${dataset}/blr.csv | prepend "${dataset}"
+        2> exp/${runID}/logs/${model}/${dataset}/blr.log \
+        | tee exp/${runID}/results/${model}/${dataset}/blr.csv | prepend "${dataset}"
 
     echo "Finished running Bayesian Logisitic Regression with LLM (${model}) Prior on ${dataset}..."
 }
 
-function run_llm_bart() {
-    mkdir -p results/${model}/${dataset}
-    mkdir -p logs/${model}/${dataset}
+function run_llm_bnn() {
+    mkdir -p exp/${runID}/results/${model}/${dataset}
+    mkdir -p exp/${runID}/logs/${model}/${dataset}
     mkdir -p prior_cache/${model}
 
-    echo "Started running Bayesian Additive Regression Trees with LLM (${model}) Prior on ${dataset}..."
+    echo "Started running Bayesian Neural Network with LLM (${model}) Prior on ${dataset}..."
 
-    python evaluate.py \
+    python exp_fsl.py \
         --base-url ${base_url} \
         --llm ${model} \
         --data-path datasets/${dataset}.arff \
@@ -89,11 +90,11 @@ function run_llm_bart() {
         --samples 0 4 8 16 32 64 128 \
         --prior-samples 128 \
         --eval-method holdout \
-        --model bart \
-        2> logs/${model}/${dataset}/bart.log \
-        | tee results/${model}/${dataset}/bart.csv | prepend "${dataset}"
+        --model bnn \
+        2> exp/${runID}/logs/${model}/${dataset}/bnn.log \
+        | tee exp/${runID}/results/${model}/${dataset}/bnn.csv | prepend "${dataset}"
 
-    echo "Finished running Bayesian Additive Regression Trees with LLM (${model}) Prior on ${dataset}..."
+    echo "Finished running Bayesian Neural Network with LLM (${model}) Prior on ${dataset}..."
 }
 
 function run_on_dataset() {
@@ -101,8 +102,8 @@ function run_on_dataset() {
 
     run_llm_blr ${dataset}
     run_baseline_blr ${dataset}
-    run_llm_bart ${dataset}
-    run_baseline_bart ${dataset}
+    run_llm_bnn ${dataset}
+    run_baseline_bnn ${dataset}
 }
 
 for dataset in ${datasets[@]}
