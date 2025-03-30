@@ -88,7 +88,7 @@ class SciKitPyMC(ABC, BaseEstimator, ClassifierMixin):
         self.pymc_model_ = self._create_pymc_model(X, y, K_X, K_y)
 
         with self.pymc_model_:
-            self.idata_ = pm.sample(self.n_iter, tune=self.n_iter, progressbar=progress, nuts_sampler="nutpie")
+            self.idata_ = pm.sample(self.n_iter, tune=self.n_iter, progressbar=progress)
 
     def predict(self, X, progress=False):
         probs = self.predict_proba(X, progress)
@@ -132,11 +132,11 @@ class SciKitPyMC(ABC, BaseEstimator, ClassifierMixin):
             y_hat = y_hat / y_hat.sum(axis=0)
             return y_hat.transpose()
 
-    def score(self, X, y):
+    def score(self, X, y, progress=False):
         if len(self.classes_) == 2:
-            return roc_auc_score(y, self.predict_proba(X)[:, 1])
+            return roc_auc_score(y, self.predict_proba(X, progress=progress)[:, 1])
         else:
-            return roc_auc_score(y, self.predict_proba(X), multi_class="ovr")
+            return roc_auc_score(y, self.predict_proba(X, progress=progress), multi_class="ovr")
 
 
 class BNNClassifier(SciKitPyMC):

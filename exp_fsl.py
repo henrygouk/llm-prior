@@ -87,9 +87,9 @@ def evaluate_repeated_cv(X, y, K_X, K_py, model, args):
 
             try:
                 if args.prior_samples > 0:
-                    model.fit(X_train_k, y_train_k, K_X, K_py)
+                    model.fit(X_train_k, y_train_k, K_X, K_py, args.progress)
                 else:
-                    model.fit(X_train_k, y_train_k)
+                    model.fit(X_train_k, y_train_k, args.progress)
 
                 auc = model.score(X_test, y_test)
                 print(f"{rep},{fold},{X_train_k.shape[0]},{auc}")
@@ -98,24 +98,26 @@ def evaluate_repeated_cv(X, y, K_X, K_py, model, args):
 
 def evaluate_repeated_holdout(X, y, K_X, K_py, model, args):
     rng = np.random.default_rng(args.seed)
+    rep_size = args.ho_max_test_size + max(args.samples)
 
     print("rep,num_train,roc_auc")
 
     for i in range(args.ho_reps):
+        X_rep, _, y_rep, _ = train_test_split(X, y, train_size=rep_size, stratify=y, random_state=rng.integers(0, 2**32))
         for k in args.samples:
             if k == 0:
-                X_train, y_train = np.zeros((0, X.shape[1])), np.zeros(0)
-                X_test, y_test = X, y
+                X_train, y_train = np.zeros((0, X_rep.shape[1])), np.zeros(0)
+                X_test, y_test = X_rep[:args.ho_max_test_size], y_rep[:args.ho_max_test_size]
             else:
-                X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=k, stratify=y, random_state=rng.integers(0, 2**32))
+                X_train, X_test, y_train, y_test = train_test_split(X_rep, y_rep, train_size=k, stratify=y_rep, random_state=rng.integers(0, 2**32))
 
             try:
                 if K_X is not None:
-                    model.fit(X_train, y_train, K_X, K_py)
+                    model.fit(X_train, y_train, K_X, K_py, progress=args.progress)
                 else:
-                    model.fit(X_train, y_train)
+                    model.fit(X_train, y_train, progress=args.progress)
 
-                auc = model.score(X_test, y_test)
+                auc = model.score(X_test, y_test, progress=args.progress)
                 print(f"{i},{k},{auc}")
             except Exception as e:
                 # Print to stderr
@@ -132,6 +134,7 @@ def main():
     parser.add_argument("--llm-sampler", type=str, default="direct")
     parser.add_argument("--samples", nargs="+", type=int, default=[4, 8, 16, 32, 64, 128])
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--progress", action="store_true")
 
     parser.add_argument("--eval-method", choices=["crossval", "holdout"], required=True)
     # Options for crossval
@@ -139,6 +142,7 @@ def main():
     parser.add_argument("--cv-reps", type=int, default=5)
     # Options for holdout
     parser.add_argument("--ho-reps", type=int, default=50)
+    parser.add_argument("--ho-max-test-size", type=int, default=500)
 
     parser.add_argument("--model", choices=["blr", "bnn"], required=True)
     parser.add_argument("--tau-min", type=float, default=0.5)

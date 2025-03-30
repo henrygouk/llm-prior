@@ -29,7 +29,7 @@ function run_baseline_blr() {
         --samples 4 8 16 32 64 128 \
         --eval-method holdout \
         --model blr \
-        2> exp/${runID}logs/baseline/${dataset}/blr.log \
+        2> exp/${runID}/logs/baseline/${dataset}/blr.log \
         | tee exp/${runID}/results/baseline/${dataset}/blr.csv | prepend "${dataset}"
 
     echo "Finished running Bayesian Logistic Regression on ${dataset}..."
@@ -100,10 +100,10 @@ function run_llm_bnn() {
 function run_on_dataset() {
     dataset=$1
 
-    run_llm_blr ${dataset}
     run_baseline_blr ${dataset}
-    run_llm_bnn ${dataset}
     run_baseline_bnn ${dataset}
+    run_llm_blr ${dataset}
+    run_llm_bnn ${dataset}
 }
 
 for dataset in ${datasets[@]}
