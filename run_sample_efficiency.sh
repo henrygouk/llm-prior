@@ -30,7 +30,7 @@ function run_baseline_blr() {
         --eval-method holdout \
         --model blr \
         2> exp/${runID}/logs/baseline/${dataset}/blr.log \
-        | tee exp/${runID}/results/baseline/${dataset}/blr.csv | prepend "${dataset}"
+        | tee exp/${runID}/results/baseline/${dataset}/blr.csv | prepend "${dataset}-BLR"
 
     echo "Finished running Bayesian Logistic Regression on ${dataset}..."
 }
@@ -48,7 +48,7 @@ function run_baseline_bnn() {
         --eval-method holdout \
         --model bnn \
         2> exp/${runID}/logs/baseline/${dataset}/bnn.log \
-        | tee exp/${runID}/results/baseline/${dataset}/bnn.csv | prepend "${dataset}"
+        | tee exp/${runID}/results/baseline/${dataset}/bnn.csv | prepend "${dataset}-BNN"
 
     echo "Finished running Bayesian Neural Network on ${dataset}..."
 }
@@ -70,7 +70,7 @@ function run_llm_blr() {
         --eval-method holdout \
         --model blr \
         2> exp/${runID}/logs/${model}/${dataset}/blr.log \
-        | tee exp/${runID}/results/${model}/${dataset}/blr.csv | prepend "${dataset}"
+        | tee exp/${runID}/results/${model}/${dataset}/blr.csv | prepend "${dataset}-BLR-LLM"
 
     echo "Finished running Bayesian Logisitic Regression with LLM (${model}) Prior on ${dataset}..."
 }
@@ -92,27 +92,38 @@ function run_llm_bnn() {
         --eval-method holdout \
         --model bnn \
         2> exp/${runID}/logs/${model}/${dataset}/bnn.log \
-        | tee exp/${runID}/results/${model}/${dataset}/bnn.csv | prepend "${dataset}"
+        | tee exp/${runID}/results/${model}/${dataset}/bnn.csv | prepend "${dataset}-BNN-LLM"
 
     echo "Finished running Bayesian Neural Network with LLM (${model}) Prior on ${dataset}..."
 }
 
 function run_on_dataset() {
     dataset=$1
-
-    run_baseline_blr ${dataset}
-    run_baseline_bnn ${dataset}
-    run_llm_blr ${dataset}
-    run_llm_bnn ${dataset}
+    
+    if [[ $(jobs -r -p | wc -l) -ge $N ]]; then
+        wait -n
+    fi
+    run_baseline_blr ${dataset} &
+    
+    if [[ $(jobs -r -p | wc -l) -ge $N ]]; then
+        wait -n
+    fi
+    run_baseline_bnn ${dataset} &
+    
+    if [[ $(jobs -r -p | wc -l) -ge $N ]]; then
+        wait -n
+    fi
+    run_llm_blr ${dataset} &
+    
+    if [[ $(jobs -r -p | wc -l) -ge $N ]]; then
+        wait -n
+    fi
+    run_llm_bnn ${dataset} &
 }
 
 for dataset in ${datasets[@]}
 do
-    run_on_dataset ${dataset} &
-
-    if [[ $(jobs -r -p | wc -l) -ge $N ]]; then
-        wait
-    fi
+    run_on_dataset ${dataset}
 done
 
 wait
