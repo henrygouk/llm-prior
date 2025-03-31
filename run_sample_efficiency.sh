@@ -5,7 +5,7 @@
 base_url=${1:-http://localhost:8000/v1}
 model=${2:-meta-llama/Meta-Llama-3.1-8B-Instruct}
 N=${3:-4}
-runID=${4:-`date +%s`}
+runID=${4:-`date +%Y-%m-%d_%H-%M-%S`_se}
 
 # Run on all datasets in the ./datasets/ directory
 datasets=`find ./datasets/ -maxdepth 1 -type f -name "*.arff" -exec basename {} \; | sed 's/.arff//g'`
