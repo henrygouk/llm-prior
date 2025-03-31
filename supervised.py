@@ -7,7 +7,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score
 
 class SciKitPyMC(ABC, BaseEstimator, ClassifierMixin):
-    def __init__(self, gamma=(0.5, 5.0), delta=(0.0, 5.0), use_uncertainty=True, n_iter=2_000, nominal_features=[], n_classes=2):
+    def __init__(self, gamma=(0.5, 5.0), delta=(0.0, 5.0), use_uncertainty=True, n_iter=2_000, nominal_features=[], n_classes=2, nuts_sampler="pymc"):
         self.nominal_features = nominal_features
         self.gamma = gamma
         self.delta = delta
@@ -15,6 +15,7 @@ class SciKitPyMC(ABC, BaseEstimator, ClassifierMixin):
         self.n_iter = n_iter
         self.n_classes = n_classes
         self.classes_ = np.arange(n_classes)
+        self.nuts_sampler = nuts_sampler
 
     def get_params(self, deep=True):
         return {
@@ -88,7 +89,7 @@ class SciKitPyMC(ABC, BaseEstimator, ClassifierMixin):
         self.pymc_model_ = self._create_pymc_model(X, y, K_X, K_y)
 
         with self.pymc_model_:
-            self.idata_ = pm.sample(self.n_iter, tune=self.n_iter, progressbar=progress)
+            self.idata_ = pm.sample(self.n_iter, tune=self.n_iter, progressbar=progress, nuts_sampler=self.nuts_sampler)
 
     def predict(self, X, progress=False):
         probs = self.predict_proba(X, progress)
@@ -148,18 +149,12 @@ class BNNClassifier(SciKitPyMC):
     def get_params(self, deep=True):
         return {
             **super().get_params(),
+            "tau": self.tau,
             "hidden_size": self.hidden_size
         }
 
     def set_params(self, **params):
         super().set_params(**params)
-
-        if "hidden_size" in params:
-            self.hidden_size = params["hidden_size"]
-
-        if "tau" in params:
-            self.tau = params["tau"]
-
         return self
 
     def _create_pymc_model(self, X, y, K_X, K_y):
@@ -231,8 +226,6 @@ class BLRClassifier(SciKitPyMC):
 
     def set_params(self, **params):
         super().set_params(**params)
-        if "tau" in params:
-            self.tau = params["tau"]
         return self
     
     def _create_pymc_model(self, X, y, K_X, K_y):
@@ -306,5 +299,5 @@ if __name__ == "__main__":
     X_test = X[40:]
     y_test = y[40:]
 
-    #test_bnn_classifier(X_train, y_train, K_X, K_y, X_test, y_test)
+    test_bnn_classifier(X_train, y_train, K_X, K_y, X_test, y_test)
     test_blr_classifier(X_train, y_train, K_X, K_y, X_test, y_test)

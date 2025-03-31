@@ -48,7 +48,8 @@ class RemoteLLM:
         ).choices[0].message.content
 
 class DirectLLMSampler:
-    def __init__(self, meta_data: MetaData, model: str, base_url: str | None):
+    def __init__(self, meta_data: MetaData, model: str, base_url: str | None, use_random_features: bool = False):
+        self.use_random_features = use_random_features
         self.llm = llm_factory(model, base_url)
         self.meta_data = meta_data
         self.features_schema = self._create_features_schema()
@@ -221,10 +222,105 @@ class DirectLLMSampler:
 
         return y / y.sum(axis=1, keepdims=True)
 
+    def _sample_meanvar(self, feature: Attribute) -> Tuple[float, float]:
+        nl = '\n'
+        messages = [
+            {
+                "role": "system",
+                "content": f"You are an expert in the field of {self.meta_data.field}.\n"
+                           f"Your top priority is to provide statisticians with the domain knowedge required to analyse their data. {self.meta_data.description}\n"
+                           f"The dataset has the following features:\n{nl.join([self._feature_to_str(f) for f in self.meta_data.features])}\n"
+                           f"The dataset has the following target:\n{self.meta_data.target.name}: {self.meta_data.target.description} "
+                           f"It can take these values: {', '.join(self.meta_data.target.values)}.\n"
+            },
+            {
+                "role": "user",
+                "content": f"Give the mean and variance of the {feature.name} feature in JSON format."
+            }
+        ]
+
+        response = self.llm.get_completion(messages, {"type": "object", "properties": {"mean": {"type": "number"}, "variance": {"type": "number"}}})
+
+        try:
+            res = json.loads(response)
+            ret = (res["mean"], res["variance"])
+            return ret
+        except Exception as e:
+            print(f"Error parsing response: {response}", file=sys.stderr)
+            print(f"Error: {e}", file=sys.stderr)
+            return 0.0, 1.0
+
+    def random_features(self, n: int) -> np.ndarray:
+        # Get the mean and variance of each numerical feature from the LLM
+        means_vars = {f.name: self._sample_meanvar(f) for f in self.meta_data.features if f.dtype == "float"}
+
+        print(f"Sampled means and vars: {means_vars}", file=sys.stderr)
+
+        # Generate some random features using Gaussians for numeric features and uniform for categorical
+        X = np.zeros((n, len(self.meta_data.features)))
+
+        for i, f in enumerate(self.meta_data.features):
+            if f.dtype == "float":
+                X[:, i] = np.random.normal(means_vars[f.name][0], np.sqrt(means_vars[f.name][1]), n)
+                X[:, i] = round_to_significant_figures(X[:, i], 4)
+            elif f.dtype == "str":
+                X[:, i] = np.random.randint(0, len(f.values), n)
+            else:
+                raise ValueError(f"Invalid data type: {f.dtype}. Must be one of ['float', 'str']")
+
+        return X
+
     def sample(self, n: int, batch_size: int = 5, num_trials: int = 5, target_smooth: float = 0.5) -> Tuple[np.ndarray, np.ndarray]:
-        X = self.sample_features(n, batch_size)
+        X = self.random_features(n) if self.use_random_features else self.sample_features(n, batch_size)
         y = self.sample_targets(X, num_trials, target_smooth)
         return X, y
+
+import numpy as np
+
+# Code acquired via ChatGPT:
+def round_to_significant_figures(values, n):
+    """
+    Round the input array 'values' to 'n' significant figures.
+
+    Parameters
+    ----------
+    values : array_like
+        Input data that needs rounding.
+    n : int
+        Number of significant figures to round to.
+
+    Returns
+    -------
+    rounded : ndarray
+        The array of values rounded to n significant figures.
+    """
+    values = np.array(values, dtype=float)  # Ensure we have a NumPy array
+    
+    # Handle zeros separately to avoid log10(0) = -inf problems
+    # We'll store a mask of where values are zero
+    zero_mask = (values == 0)
+    
+    # Take the absolute value and find log10 to get order of magnitude
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mags = np.floor(np.log10(np.abs(values)))  # might be inf or nan if values=0
+    
+    # For zero values, we set magnitude to 0 to avoid inf/nan
+    mags[zero_mask] = 0
+    
+    # scale = 10^(n-1 - magnitude)
+    scale = 10 ** (n - 1 - mags)
+    
+    # Perform the rounding using np.round
+    rounded_scaled = np.round(values * scale)
+    
+    # Scale back down
+    rounded = rounded_scaled / scale
+    
+    # Re-insert the zeros if needed
+    rounded[zero_mask] = 0
+    
+    return rounded
+
 
 def test_iris():
     meta_data = MetaData(

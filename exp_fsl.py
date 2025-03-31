@@ -1,12 +1,17 @@
+import os
+os.environ['OPENBLAS_NUM_THREADS'] = '1' 
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
+
 import argparse
 from data import load_arff
 from llm import DirectLLMSampler
 import numpy as np
-import os
 import sys
 import pickle
-from sklearn.model_selection import RepeatedStratifiedKFold, train_test_split
-from sklearn.experimental import enable_halving_search_cv
+from sklearn.model_selection import train_test_split
+from sklearn.experimental import enable_halving_search_cv #noqa
 from sklearn.model_selection import HalvingRandomSearchCV
 from scipy.stats import uniform
 
@@ -26,7 +31,7 @@ def load_data(args):
                 K_py = K_py[:args.prior_samples]
         else:
             if args.llm_sampler == "direct":
-                sampler = DirectLLMSampler(meta_data, args.llm, args.base_url) #DirectLLMSampler(client, args.llm, meta_data)
+                sampler = DirectLLMSampler(meta_data, args.llm, args.base_url, use_random_features=args.use_rand_features) #DirectLLMSampler(client, args.llm, meta_data)
             else:
                 raise ValueError(f"Unknown LLM sampler: {args.llm_sampler}")
 
@@ -58,49 +63,12 @@ def create_model(meta_data, args):
     else:
         raise ValueError(f"Unknown model: {args.model}")
 
-# Repeated holdout will give a better picture of true performance than CV in the few-shot setting
-def evaluate_repeated_cv(X, y, K_X, K_py, model, args):
-    num_classes = len(np.unique(y))
-    print("rep,fold,num_train,roc_auc")
-
-    rskf = RepeatedStratifiedKFold(n_splits=args.cv_folds, n_repeats=args.cv_reps, random_state=args.seed)
-
-    for split_id, (train_index, test_index) in enumerate(rskf.split(X, y)):
-        rep = int(split_id / args.cv_folds)
-        fold = split_id % args.cv_folds
-
-        X_train = X[train_index]
-        y_train = y[train_index]
-        X_test = X[test_index]
-        y_test = y[test_index]
-
-        for k in args.samples:
-            if k == X_train.shape[0]:
-                X_train_k = X_train
-                y_train_k = y_train
-            elif k == 0:
-                X_train_k, y_train_k = np.zeros((0, X_train.shape[1])), np.zeros(0)
-            elif k < X_train.shape[0] and num_classes <= k:
-                X_train_k, _, y_train_k, _ = train_test_split(X_train, y_train, train_size=k, stratify=y_train, random_state=args.seed)
-            else:
-                raise ValueError("--samples cannot contain a value greater than the the number of classes or the number of training samples avialable during cross validation.")
-
-            try:
-                if args.prior_samples > 0:
-                    model.fit(X_train_k, y_train_k, K_X, K_py, args.progress)
-                else:
-                    model.fit(X_train_k, y_train_k, args.progress)
-
-                auc = model.score(X_test, y_test)
-                print(f"{rep},{fold},{X_train_k.shape[0]},{auc}")
-            except Exception as e:
-                print(f"{rep},{fold},{X_train_k.shape[0]},nan")
-
-def evaluate_repeated_holdout(X, y, K_X, K_py, model, args):
+def evaluate_repeated_holdout(X, y, K_X, K_py, base_model, args):
     rng = np.random.default_rng(args.seed)
     rep_size = args.ho_max_test_size + max(args.samples)
 
-    print("rep,num_train,roc_auc")
+    if not args.no_header:
+        print("rep,num_prior,num_train,roc_auc")
 
     for i in range(args.ho_reps):
         X_rep, _, y_rep, _ = train_test_split(X, y, train_size=rep_size, stratify=y, random_state=rng.integers(0, 2**32))
@@ -111,18 +79,37 @@ def evaluate_repeated_holdout(X, y, K_X, K_py, model, args):
             else:
                 X_train, X_test, y_train, y_test = train_test_split(X_rep, y_rep, train_size=k, stratify=y_rep, random_state=rng.integers(0, 2**32))
 
+            if k > base_model.n_classes * 4:
+                model = HalvingRandomSearchCV(
+                    base_model,
+                    param_distributions={
+                        "tau": uniform(args.tau_min, args.tau_max - args.tau_min),
+                        "gamma": uniform(args.gamma_min, args.gamma_max - args.gamma_min),
+                        "delta": uniform(args.delta_min, args.delta_max - args.delta_min)
+                    },
+                    resource="n_iter",
+                    max_resources=2000,
+                    min_resources=125,
+                    random_state=rng.integers(0, 2**32),
+                    cv=4,
+                    factor=2,
+                    n_jobs=1
+                )
+            else:
+                model = base_model
+
             try:
                 if K_X is not None:
                     model.fit(X_train, y_train, K_X, K_py, progress=args.progress)
                 else:
                     model.fit(X_train, y_train, progress=args.progress)
 
-                auc = model.score(X_test, y_test, progress=args.progress)
-                print(f"{i},{k},{auc}")
+                auc = model.score(X_test, y_test)
+                print(f"{i},{args.prior_samples},{k},{auc}")
             except Exception as e:
                 # Print to stderr
                 print(e, file=sys.stderr)
-                print(f"{i},{k},nan")
+                print(f"{i},{args.prior_samples},{k},nan")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -135,11 +122,10 @@ def main():
     parser.add_argument("--samples", nargs="+", type=int, default=[4, 8, 16, 32, 64, 128])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--progress", action="store_true")
+    parser.add_argument("--no-header", action="store_true")
+    parser.add_argument("--use-rand-features", action="store_true")
 
-    parser.add_argument("--eval-method", choices=["crossval", "holdout"], required=True)
-    # Options for crossval
-    parser.add_argument("--cv-folds", type=int, default=10)
-    parser.add_argument("--cv-reps", type=int, default=5)
+    parser.add_argument("--eval-method", choices=["holdout"], required=True)
     # Options for holdout
     parser.add_argument("--ho-reps", type=int, default=50)
     parser.add_argument("--ho-max-test-size", type=int, default=500)
@@ -161,9 +147,7 @@ def main():
     model = create_model(meta_data, args)
 
     # Evaluate the model
-    if args.eval_method == "crossval":
-        evaluate_repeated_cv(X, y, K_X, K_py, model, args)
-    elif args.eval_method == "holdout":
+    if args.eval_method == "holdout":
         evaluate_repeated_holdout(X, y, K_X, K_py, model, args)
     else:
         raise ValueError(f"Unknown evaluation method: {args.eval_method}")
