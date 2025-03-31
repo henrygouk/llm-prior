@@ -7,7 +7,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score
 
 class SciKitPyMC(ABC, BaseEstimator, ClassifierMixin):
-    def __init__(self, gamma=(0.5, 5.0), delta=(0.0, 5.0), use_uncertainty=True, n_iter=2_000, nominal_features=[], n_classes=2, nuts_sampler="pymc"):
+    def __init__(self, gamma=(0.5, 5.0), delta=(0.0, 5.0), use_uncertainty=True, n_iter=2_000, nominal_features=[], n_classes=2, nuts_sampler="pymc", K_X=None, K_y=None):
         self.nominal_features = nominal_features
         self.gamma = gamma
         self.delta = delta
@@ -16,6 +16,8 @@ class SciKitPyMC(ABC, BaseEstimator, ClassifierMixin):
         self.n_classes = n_classes
         self.classes_ = np.arange(n_classes)
         self.nuts_sampler = nuts_sampler
+        self.K_X = K_X
+        self.K_y = K_y
 
     def get_params(self, deep=True):
         return {
@@ -68,7 +70,9 @@ class SciKitPyMC(ABC, BaseEstimator, ClassifierMixin):
     def _create_pymc_model(self, X, y, K_X, K_y):
         pass
 
-    def fit(self, X, y, K_X=None, K_y=None, progress=False):
+    def fit(self, X, y, progress=False):
+        K_X = self.K_X
+        K_y = self.K_y
         if (K_X is None) != (K_y is None):
             raise ValueError("K_X and K_y must be both None or both not None")
     
@@ -275,14 +279,14 @@ class BLRClassifier(SciKitPyMC):
 
 
 def test_bnn_classifier(X_train, y_train, K_X, K_y, X_test, y_test):
-    bnn = BNNClassifier(tau=1.0)
-    bnn.fit(X_train, y_train, K_X=K_X, K_y=K_y, progress=True)
+    bnn = BNNClassifier(tau=1.0, K_X=K_X, K_y=K_y)
+    bnn.fit(X_train, y_train, progress=True)
     y_hat = bnn.predict(X_test, progress=True)
     print((y_hat == y_test.astype(int)).mean())
 
 def test_blr_classifier(X_train, y_train, K_X, K_y, X_test, y_test):
-    blr = BLRClassifier(tau=1.0)
-    blr.fit(X_train, y_train, K_X=K_X, K_y=K_y, progress=True)
+    blr = BLRClassifier(tau=1.0, K_X=K_X, K_y=K_y)
+    blr.fit(X_train, y_train, progress=True)
     y_hat = blr.predict(X_test, progress=True)
     print((y_hat == y_test.astype(int)).mean())
 

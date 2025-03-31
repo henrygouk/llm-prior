@@ -43,14 +43,16 @@ def load_data(args):
 
     return meta_data, X, y, K_X, K_py
 
-def create_model(meta_data, args):
+def create_model(meta_data, K_X, K_y, args):
     if args.model == "blr":
         return BLRClassifier(
             tau=(args.tau_min, args.tau_max),
             gamma=(args.gamma_min, args.gamma_max),
             delta=(args.delta_min, args.delta_max),
             nominal_features=[(i, len(f.values)) for i, f in enumerate(meta_data.features) if f.dtype == "str"],
-            n_classes=len(meta_data.target.values)
+            n_classes=len(meta_data.target.values),
+            K_X=K_X,
+            K_y=K_y
         )
     elif args.model == "bnn":
         return BNNClassifier(
@@ -58,12 +60,14 @@ def create_model(meta_data, args):
             gamma=(args.gamma_min, args.gamma_max),
             delta=(args.delta_min, args.delta_max),
             nominal_features=[(i, len(f.values)) for i, f in enumerate(meta_data.features) if f.dtype == "str"],
-            n_classes=len(meta_data.target.values)
+            n_classes=len(meta_data.target.values),
+            K_X=K_X,
+            K_y=K_y
         )
     else:
         raise ValueError(f"Unknown model: {args.model}")
 
-def evaluate_repeated_holdout(X, y, K_X, K_py, base_model, args):
+def evaluate_repeated_holdout(X, y, base_model, args):
     rng = np.random.default_rng(args.seed)
     rep_size = args.ho_max_test_size + max(args.samples)
 
@@ -99,10 +103,7 @@ def evaluate_repeated_holdout(X, y, K_X, K_py, base_model, args):
                 model = base_model
 
             try:
-                if K_X is not None:
-                    model.fit(X_train, y_train, K_X, K_py, progress=args.progress)
-                else:
-                    model.fit(X_train, y_train, progress=args.progress)
+                model.fit(X_train, y_train, progress=args.progress)
 
                 auc = model.score(X_test, y_test)
                 print(f"{i},{args.prior_samples},{k},{auc}")
@@ -141,14 +142,14 @@ def main():
     args = parser.parse_args()
 
     # Load th data
-    meta_data, X, y, K_X, K_py = load_data(args)
+    meta_data, X, y, K_X, K_y = load_data(args)
 
     # Create the model
-    model = create_model(meta_data, args)
+    model = create_model(meta_data, K_X, K_y, args)
 
     # Evaluate the model
     if args.eval_method == "holdout":
-        evaluate_repeated_holdout(X, y, K_X, K_py, model, args)
+        evaluate_repeated_holdout(X, y, model, args)
     else:
         raise ValueError(f"Unknown evaluation method: {args.eval_method}")
 
